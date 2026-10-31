@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Nauka" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">#2F6B4F</item>
+        <item name="colorSecondary">#B3262D</item>
+        <item name="android:statusBarColor">#2F6B4F</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

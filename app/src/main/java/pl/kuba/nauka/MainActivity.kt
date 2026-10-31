@@ -58,7 +58,19 @@ class MainActivity : AppCompatActivity() {
         root.addView(scroll, Ui.lp(-1, 0, 1f))
         setContentView(root)
 
+        seedSample()
         handleShare(intent)
+    }
+
+    /** Przy pierwszym uruchomieniu dodaje przykładowy materiał (Pieśni legionowe). */
+    private fun seedSample() {
+        val p = getSharedPreferences("ustawienia", MODE_PRIVATE)
+        if (p.getBoolean("seeded", false)) return
+        p.edit().putBoolean("seeded", true).apply()
+        try {
+            val t = assets.open("piesni_legionowe.txt").bufferedReader(Charsets.UTF_8).readText()
+            if (Store.all(this).isEmpty()) Store.addText(this, "Pieśni legionowe", t)
+        } catch (_: Exception) { }
     }
 
     override fun onNewIntent(intent: Intent) {

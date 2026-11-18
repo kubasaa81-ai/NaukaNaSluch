@@ -122,7 +122,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun takePhoto() {
-        val dir = File(cacheDir, "strony").apply { mkdirs() }
+        val dir = File(getExternalFilesDir(android.os.Environment.DIRECTORY_PICTURES) ?: filesDir, "strony").apply { mkdirs() }
         if (pages.isEmpty()) dir.listFiles()?.forEach { it.delete() }   // stare zdjęcia z poprzedniej serii
         val f = File(dir, "strona_${System.currentTimeMillis()}.jpg")
         val u = FileProvider.getUriForFile(this, "$packageName.pliki", f)

@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <cache-path name="strony" path="strony/" />
+    <cache-path name="strony_cache" path="strony/" />
+    <external-files-path name="strony" path="Pictures/strony/" />
+    <files-path name="strony_wew" path="strony/" />
 </paths>

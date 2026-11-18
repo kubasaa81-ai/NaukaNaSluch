@@ -2,12 +2,10 @@ package pl.kuba.nauka
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
-import androidx.exifinterface.media.ExifInterface
 import com.google.android.gms.tasks.Tasks
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -29,9 +27,10 @@ object Ocr {
             val pages = mutableListOf<String>()
             uris.forEachIndexed { i, u ->
                 progress(i + 1, uris.size)
-                val bmp = loadBitmap(c, u) ?: throw IllegalStateException("nie da się otworzyć zdjęcia nr ${i + 1}")
-                val t = recognize(rec, InputImage.fromBitmap(bmp.first, bmp.second))
-                bmp.first.recycle()
+                val bmp = try { ImageLoad.load(c, u, MAX_SIDE) }
+                          catch (e: Exception) { throw IllegalStateException("zdjęcie nr ${i + 1}: ${e.message}") }
+                val t = recognize(rec, InputImage.fromBitmap(bmp, 0))
+                bmp.recycle()
                 if (t.isNotBlank()) pages.add(t)
             }
             return pages.joinToString("\n\n")
@@ -74,35 +73,5 @@ object Ocr {
         // bloki tekstu (akapity) od góry do dołu, każdy blok oddzielony pustą linią
         val blocks = res.textBlocks.sortedWith(compareBy({ it.boundingBox?.top ?: 0 }, { it.boundingBox?.left ?: 0 }))
         return blocks.joinToString("\n\n") { b -> b.lines.joinToString("\n") { it.text } }.trim()
-    }
-
-    /** Wczytuje zdjęcie pomniejszone (oszczędność pamięci) + obrót z EXIF. */
-    private fun loadBitmap(c: Context, u: Uri): Pair<Bitmap, Int>? {
-        val cr = c.contentResolver
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        cr.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, bounds) } ?: return null
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
-        var sample = 1
-        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_SIDE) sample *= 2
-        val bmp = cr.openInputStream(u)?.use {
-            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
-        } ?: return null
-        // dokładne dopasowanie do MAX_SIDE (mniej pamięci, szybciej, ML Kit lubi ok. 2000 px)
-        val big = maxOf(bmp.width, bmp.height)
-        val fitted = if (big > MAX_SIDE) {
-            val k = MAX_SIDE.toFloat() / big
-            Bitmap.createScaledBitmap(bmp, (bmp.width * k).toInt(), (bmp.height * k).toInt(), true).also { if (it != bmp) bmp.recycle() }
-        } else bmp
-        val rot = try {
-            cr.openInputStream(u)?.use {
-                when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> 90
-                    ExifInterface.ORIENTATION_ROTATE_180 -> 180
-                    ExifInterface.ORIENTATION_ROTATE_270 -> 270
-                    else -> 0
-                }
-            } ?: 0
-        } catch (_: Exception) { 0 }
-        return fitted to rot
     }
 }

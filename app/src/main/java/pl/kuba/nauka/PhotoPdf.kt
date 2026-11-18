@@ -2,8 +2,6 @@ package pl.kuba.nauka
 
 import android.content.ContentValues
 import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
@@ -11,7 +9,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
-import androidx.exifinterface.media.ExifInterface
 import java.io.File
 import java.io.OutputStream
 import java.text.SimpleDateFormat
@@ -32,7 +29,7 @@ object PhotoPdf {
         val doc = PdfDocument()
         try {
             uris.forEachIndexed { i, u ->
-                val bmp = load(c, u) ?: return@forEachIndexed
+                val bmp = ImageLoad.load(c, u, MAX_SIDE)
                 // strona PDF w punktach (72 dpi) – szerokość jak A4, wysokość wg proporcji zdjęcia
                 val pw = 595
                 val ph = (bmp.height.toFloat() / bmp.width * pw).toInt().coerceAtLeast(1)
@@ -42,6 +39,7 @@ object PhotoPdf {
                 doc.finishPage(page)
                 bmp.recycle()
             }
+            if (doc.pages.isEmpty()) throw IllegalStateException("brak stron")
             return if (Build.VERSION.SDK_INT >= 29) {
                 val v = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, name)
@@ -58,33 +56,5 @@ object PhotoPdf {
                 "${dir.absolutePath}/$name"
             }
         } finally { doc.close() }
-    }
-
-    private fun load(c: Context, u: Uri): Bitmap? {
-        val cr = c.contentResolver
-        val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        cr.openInputStream(u)?.use { BitmapFactory.decodeStream(it, null, b) } ?: return null
-        if (b.outWidth <= 0) return null
-        var s = 1
-        while (maxOf(b.outWidth, b.outHeight) / (s * 2) >= MAX_SIDE) s *= 2
-        var bmp = cr.openInputStream(u)?.use {
-            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = s })
-        } ?: return null
-        val rot = try {
-            cr.openInputStream(u)?.use {
-                when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                    else -> 0f
-                }
-            } ?: 0f
-        } catch (_: Exception) { 0f }
-        if (rot != 0f) {
-            val r = Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, Matrix().apply { postRotate(rot) }, true)
-            if (r != bmp) bmp.recycle()
-            bmp = r
-        }
-        return bmp
     }
 }

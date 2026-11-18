@@ -169,6 +169,89 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun handleShare(i: Intent?) {
+        if (i == null) return
+        when (i.action) {
+            Intent.ACTION_SEND -> {
+                val uri = if (android.os.Build.VERSION.SDK_INT >= 33)
+                    i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM)
+                val txt = i.getStringExtra(Intent.EXTRA_TEXT)
+                val type = i.type ?: ""
+                when {
+                    uri != null && type.startsWith("image") -> ocrAndSave(listOf(uri))
+                    uri != null -> importUris(listOf(uri), persist = false)
+                    !txt.isNullOrBlank() -> askTitleAndSave(txt)
+                }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris: List<Uri> = (if (android.os.Build.VERSION.SDK_INT >= 33)
+                    i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                else @Suppress("DEPRECATION") i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)) ?: arrayListOf()
+                if (uris.isNotEmpty()) ocrAndSave(uris)
+            }
+            Intent.ACTION_VIEW -> i.data?.let { importUris(listOf(it), persist = false) }
+        }
+        i.action = null
+    }
+
+    private fun importUris(uris: List<Uri>, persist: Boolean) {
+        val wait = progress("Wczytuję materiał…")
+        thread {
+            var last: Material? = null
+            val errors = mutableListOf<String>()
+            for (u in uris) {
+                val name = TextUtil.fileName(this, u)
+                try {
+                    val mime = TextUtil.mime(this, u)
+                    last = when {
+                        mime.startsWith("audio") -> {
+                            val keep = if (persist) try {
+                                contentResolver.takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION); u
+                            } catch (e: Exception) { copyLocal(u) } else copyLocal(u)
+                            Store.addAudio(this, name, keep.toString())
+                        }
+                        mime.startsWith("image") -> {
+                            val t = Ocr.fromImages(this, listOf(u))
+                            if (t.isBlank()) { errors.add("$name – nie widać tekstu na zdjęciu"); null }
+                            else Store.addText(this, name, t)
+                        }
+                        mime == "application/pdf" -> {
+                            var t = try { TextUtil.readPdf(this, u) } catch (e: Exception) { "" }
+                            if (t.isBlank()) {
+                                // skan – rozpoznaj tekst ze stron
+                                t = Ocr.fromScannedPdf(this, u) { n, all -> main.post { wait.setMsg("Rozpoznaję tekst ze skanu: strona $n z $all…") } }
+                            }
+                            if (t.isBlank()) { errors.add("$name – nie udało się odczytać tekstu z PDF"); null }
+                            else Store.addText(this, name, t)
+                        }
+                        else -> {
+                            val t = TextUtil.readTxt(this, u)
+                            if (t.isBlank()) { errors.add("$name – pusty plik"); null } else Store.addText(this, name, t)
+                        }
+                    }
+                } catch (e: Throwable) {
+                    errors.add("$name – nie udało się otworzyć (${(e.cause ?: e).javaClass.simpleName}: ${(e.cause ?: e).message ?: ""})")
+                }
+            }
+            main.post {
+                wait.dismiss()
+                refresh()
+                if (errors.isNotEmpty()) AlertDialog.Builder(this).setTitle("Część plików się nie wczytała")
+                    .setMessage(errors.joinToString("\n")).setPositiveButton("OK", null).show()
+                else if (uris.size == 1) last?.let { open(it) }
+            }
+        }
+    }
+
+    /** Kopia pliku audio do pamięci aplikacji (gdy nie da się zachować dostępu do oryginału). */
+    private fun copyLocal(u: Uri): Uri {
+        val dir = File(filesDir, "audio").apply { mkdirs() }
+        val f = File(dir, UUID.randomUUID().toString())
+        contentResolver.openInputStream(u)!!.use { inp -> f.outputStream().use { inp.copyTo(it) } }
+        return Uri.fromFile(f)
+    }
+
     private fun progress(msg: String): AlertDialog {
         val box = Ui.hbox(this).apply { setPadding(dp(24), dp(24), dp(24), dp(24)) }
         box.addView(ProgressBar(this))

@@ -20,7 +20,7 @@ import java.io.File
  */
 object Ocr {
 
-    private const val MAX_SIDE = 2400   // wystarczy do czytelnego tekstu, a nie zapcha pamięci
+    private const val MAX_SIDE = 2000   // wystarczy do czytelnego tekstu, a nie zapcha pamięci
 
     /** Rozpoznaje tekst z kilku zdjęć po kolei. Strony rozdziela pustą linią. */
     fun fromImages(c: Context, uris: List<Uri>, progress: (Int, Int) -> Unit = { _, _ -> }): String {
@@ -29,7 +29,7 @@ object Ocr {
             val pages = mutableListOf<String>()
             uris.forEachIndexed { i, u ->
                 progress(i + 1, uris.size)
-                val bmp = loadBitmap(c, u) ?: return@forEachIndexed
+                val bmp = loadBitmap(c, u) ?: throw IllegalStateException("nie da się otworzyć zdjęcia nr ${i + 1}")
                 val t = recognize(rec, InputImage.fromBitmap(bmp.first, bmp.second))
                 bmp.first.recycle()
                 if (t.isNotBlank()) pages.add(t)
@@ -87,6 +87,12 @@ object Ocr {
         val bmp = cr.openInputStream(u)?.use {
             BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
         } ?: return null
+        // dokładne dopasowanie do MAX_SIDE (mniej pamięci, szybciej, ML Kit lubi ok. 2000 px)
+        val big = maxOf(bmp.width, bmp.height)
+        val fitted = if (big > MAX_SIDE) {
+            val k = MAX_SIDE.toFloat() / big
+            Bitmap.createScaledBitmap(bmp, (bmp.width * k).toInt(), (bmp.height * k).toInt(), true).also { if (it != bmp) bmp.recycle() }
+        } else bmp
         val rot = try {
             cr.openInputStream(u)?.use {
                 when (ExifInterface(it).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
@@ -97,6 +103,6 @@ object Ocr {
                 }
             } ?: 0
         } catch (_: Exception) { 0 }
-        return bmp to rot
+        return fitted to rot
     }
 }

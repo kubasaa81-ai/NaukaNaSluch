@@ -53,4 +53,6 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")      // OCR w telefonie, bez internetu
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 }

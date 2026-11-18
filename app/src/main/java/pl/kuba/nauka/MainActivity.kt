@@ -15,6 +15,7 @@ import android.widget.ScrollView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import com.google.android.material.slider.Slider
 import pl.kuba.nauka.Store.listensForQuiz
 import pl.kuba.nauka.Store.quizSize
@@ -34,6 +35,23 @@ class MainActivity : AppCompatActivity() {
         if (uris.isNotEmpty()) importUris(uris, persist = true)
     }
 
+    // ---------- zdjęcia stron ----------
+    /** Zdjęcia stron zrobione w tej serii (kolejność = kolejność czytania). */
+    private val pages = ArrayList<Uri>()
+    private var pendingPhoto: Uri? = null
+
+    private val camera = registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        val u = pendingPhoto
+        pendingPhoto = null
+        if (ok && u != null) pages.add(u)
+        if (pages.isEmpty()) return@registerForActivityResult
+        nextPageDialog()
+    }
+
+    private val gallery = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
+        if (uris.isNotEmpty()) ocrAndSave(uris)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val root = Ui.vbox(this).apply { setBackgroundColor(Ui.bg(this@MainActivity)) }
@@ -48,7 +66,8 @@ class MainActivity : AppCompatActivity() {
             it.layoutParams = Ui.lp(0, -2, 1f)
         }.margins(this, l = 8))
         content.addView(row1)
-        content.addView(Ui.text(this, "PDF, TXT albo audiobook (MP3, M4A…). Możesz też w innej aplikacji wybrać „Udostępnij” → Nauka na słuch.",
+        content.addView(Ui.button(this, "📷 Zdjęcia stron (książka, zeszyt)", Ui.TEAL) { photoMenu() }.margins(this, t = 8))
+        content.addView(Ui.text(this, "PDF, TXT, zdjęcia stron albo audiobook (MP3, M4A…). Możesz też w innej aplikacji wybrać „Udostępnij” → Nauka na słuch.",
             13f, color = Ui.muted(this)).margins(this, t = 6, b = 4))
         content.addView(Ui.button(this, "⚙ Ustawienia", Ui.GREY) { settings() }.margins(this, t = 4, b = 12))
 
@@ -58,6 +77,10 @@ class MainActivity : AppCompatActivity() {
         root.addView(scroll, Ui.lp(-1, 0, 1f))
         setContentView(root)
 
+        savedInstanceState?.let { st ->
+            st.getStringArrayList("pages")?.forEach { pages.add(Uri.parse(it)) }
+            st.getString("pendingPhoto")?.let { pendingPhoto = Uri.parse(it) }
+        }
         seedSample()
         handleShare(intent)
     }
@@ -73,6 +96,12 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putStringArrayList("pages", ArrayList(pages.map { it.toString() }))
+        pendingPhoto?.let { outState.putString("pendingPhoto", it.toString()) }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleShare(intent)
@@ -83,7 +112,54 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
-    private fun pick() = picker.launch(arrayOf("application/pdf", "text/plain", "audio/*"))
+    private fun pick() = picker.launch(arrayOf("application/pdf", "text/plain", "audio/*", "image/*"))
+
+    private fun photoMenu() {
+        AlertDialog.Builder(this).setTitle("Zdjęcia stron")
+            .setItems(arrayOf("📷 Zrób zdjęcia aparatem (strona po stronie)", "🖼 Wybierz gotowe zdjęcia z galerii")) { _, w ->
+                if (w == 0) { pages.clear(); takePhoto() } else gallery.launch("image/*")
+            }.setNegativeButton("Anuluj", null).show()
+    }
+
+    private fun takePhoto() {
+        val dir = File(cacheDir, "strony").apply { mkdirs() }
+        if (pages.isEmpty()) dir.listFiles()?.forEach { it.delete() }   // stare zdjęcia z poprzedniej serii
+        val f = File(dir, "strona_${System.currentTimeMillis()}.jpg")
+        val u = FileProvider.getUriForFile(this, "$packageName.pliki", f)
+        pendingPhoto = u
+        try { camera.launch(u) }
+        catch (e: Exception) { pendingPhoto = null; Toast.makeText(this, "Nie udało się otworzyć aparatu", Toast.LENGTH_LONG).show() }
+    }
+
+    /** Po każdym zdjęciu: następna strona albo koniec. */
+    private fun nextPageDialog() {
+        val n = pages.size
+        val word = if (n == 1) "strona" else if (n in 2..4) "strony" else "stron"
+        AlertDialog.Builder(this).setTitle("Masz $n $word")
+            .setMessage("Zrób zdjęcie kolejnej strony albo zakończ – aplikacja odczyta tekst i będzie mogła go czytać na głos.\n\n" +
+                    "Wskazówka: strona płasko, dobrze oświetlona, cała w kadrze.")
+            .setPositiveButton("✅ Gotowe – odczytaj") { _, _ -> val l = ArrayList(pages); pages.clear(); ocrAndSave(l) }
+            .setNeutralButton("📷 Następna strona") { _, _ -> takePhoto() }
+            .setNegativeButton("Anuluj") { _, _ -> pages.clear() }
+            .setCancelable(false).show()
+    }
+
+    /** Rozpoznaje tekst ze zdjęć i zapisuje jako nowy materiał. */
+    private fun ocrAndSave(uris: List<Uri>) {
+        val wait = progress("Odczytuję tekst ze zdjęć…")
+        thread {
+            val t = try {
+                Ocr.fromImages(this, uris) { n, all -> main.post { wait.setMsg("Odczytuję tekst: zdjęcie $n z $all…") } }
+            } catch (e: Exception) { "" }
+            main.post {
+                wait.dismiss()
+                if (t.isBlank()) AlertDialog.Builder(this).setTitle("Nie znalazłem tekstu")
+                    .setMessage("Na zdjęciach nie udało się odczytać tekstu. Zrób zdjęcie jeszcze raz – bliżej, w lepszym świetle, bez cienia na kartce.")
+                    .setPositiveButton("OK", null).show()
+                else askTitleAndSave(t)
+            }
+        }
+    }
 
     private fun handleShare(i: Intent?) {
         if (i == null) return
@@ -93,10 +169,18 @@ class MainActivity : AppCompatActivity() {
                     i.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
                 else @Suppress("DEPRECATION") i.getParcelableExtra(Intent.EXTRA_STREAM)
                 val txt = i.getStringExtra(Intent.EXTRA_TEXT)
+                val type = i.type ?: ""
                 when {
+                    uri != null && type.startsWith("image") -> ocrAndSave(listOf(uri))
                     uri != null -> importUris(listOf(uri), persist = false)
                     !txt.isNullOrBlank() -> askTitleAndSave(txt)
                 }
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris: List<Uri> = (if (android.os.Build.VERSION.SDK_INT >= 33)
+                    i.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                else @Suppress("DEPRECATION") i.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)) ?: arrayListOf()
+                if (uris.isNotEmpty()) ocrAndSave(uris)
             }
             Intent.ACTION_VIEW -> i.data?.let { importUris(listOf(it), persist = false) }
         }
@@ -119,9 +203,18 @@ class MainActivity : AppCompatActivity() {
                             } catch (e: Exception) { copyLocal(u) } else copyLocal(u)
                             Store.addAudio(this, name, keep.toString())
                         }
+                        mime.startsWith("image") -> {
+                            val t = Ocr.fromImages(this, listOf(u))
+                            if (t.isBlank()) { errors.add("$name – nie widać tekstu na zdjęciu"); null }
+                            else Store.addText(this, name, t)
+                        }
                         mime == "application/pdf" -> {
-                            val t = TextUtil.readPdf(this, u)
-                            if (t.isBlank()) { errors.add("$name – PDF nie ma tekstu (to skan/zdjęcie)"); null }
+                            var t = try { TextUtil.readPdf(this, u) } catch (e: Exception) { "" }
+                            if (t.isBlank()) {
+                                // skan – rozpoznaj tekst ze stron
+                                t = Ocr.fromScannedPdf(this, u) { n, all -> main.post { wait.setMsg("Rozpoznaję tekst ze skanu: strona $n z $all…") } }
+                            }
+                            if (t.isBlank()) { errors.add("$name – nie udało się odczytać tekstu z PDF"); null }
                             else Store.addText(this, name, t)
                         }
                         else -> {
@@ -154,8 +247,14 @@ class MainActivity : AppCompatActivity() {
     private fun progress(msg: String): AlertDialog {
         val box = Ui.hbox(this).apply { setPadding(dp(24), dp(24), dp(24), dp(24)) }
         box.addView(ProgressBar(this))
-        box.addView(Ui.text(this, msg).margins(this, l = 16))
-        return AlertDialog.Builder(this).setView(box).setCancelable(false).show()
+        val label = Ui.text(this, msg)
+        box.addView(label, Ui.lp(0, -2, 1f))
+        label.margins(this, l = 16)
+        return AlertDialog.Builder(this).setView(box).setCancelable(false).show().also { it.window?.decorView?.tag = label }
+    }
+
+    private fun AlertDialog.setMsg(s: String) {
+        (window?.decorView?.tag as? android.widget.TextView)?.text = s
     }
 
     private fun pasteDialog() {
@@ -187,7 +286,7 @@ class MainActivity : AppCompatActivity() {
         if (items.isEmpty()) {
             val c = Ui.card(this)
             c.addView(Ui.text(this, "Brak materiałów", 18f, true))
-            c.addView(Ui.text(this, "Dodaj PDF lub plik TXT z tekstem do nauki (np. piosenkę, wiersz, notatki z biologii) albo audiobook. " +
+            c.addView(Ui.text(this, "Dodaj PDF, plik TXT albo zrób zdjęcia stron z tekstem do nauki (np. piosenkę, wiersz, notatki z biologii) albo audiobook. " +
                     "Aplikacja przeczyta tekst na głos, pozwoli zakryć tekst do sprawdzenia się, a po kilku przesłuchaniach zada pytania.",
                 15f, color = Ui.muted(this)).margins(this, t = 6))
             list.addView(c)
